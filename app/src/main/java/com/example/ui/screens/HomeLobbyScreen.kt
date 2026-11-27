@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SportsSoccer
@@ -59,6 +60,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.ai.AiCoachUiState
 import com.example.model.CareerStats
 import com.example.model.Difficulty
 import com.example.model.FormationType
@@ -67,12 +69,14 @@ import com.example.model.GraphicsQuality
 import com.example.model.SquadPlayer
 import com.example.model.Team
 import com.example.model.TeamCatalog
+import com.example.ui.components.AiCoachOverlay
 import com.example.ui.components.AudioAndGraphicsPanel
 import com.example.ui.components.TacticsAndSubsOverlay
 import com.example.ui.components.TeamCrest
 import com.example.ui.theme.ChakraPetchFontFamily
 import com.example.ui.theme.ChampionshipGold
 import com.example.ui.theme.DividerSubtle
+import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.StadiumCard
 import com.example.ui.theme.StadiumElevated
 import com.example.ui.theme.StadiumObsidian
@@ -98,15 +102,24 @@ fun HomeLobbyScreen(
     onDifficultySelected: (Difficulty) -> Unit,
     onShowPassIndicatorChange: (Boolean) -> Unit,
     onMatchDurationSelected: (Int) -> Unit,
+    aiCoachState: AiCoachUiState,
+    onAskAiCoach: (String) -> Unit,
+    onRetryAiCoach: () -> Unit,
+    onResetAiCoach: () -> Unit,
     onStartMatch: () -> Unit
 ) {
     val homeTeam = remember(settings.homeTeamId) { TeamCatalog.findById(settings.homeTeamId) }
     val awayTeam = remember(settings.awayTeamId) { TeamCatalog.findById(settings.awayTeamId) }
     var selectingForHome by remember { mutableStateOf(true) }
     var showTactics by remember { mutableStateOf(false) }
+    var showAiCoach by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = showTactics) {
-        showTactics = false
+    BackHandler(enabled = showAiCoach || showTactics) {
+        if (showAiCoach) {
+            showAiCoach = false
+        } else {
+            showTactics = false
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -270,7 +283,8 @@ fun HomeLobbyScreen(
                         onPickHomeSlot = { selectingForHome = true },
                         onPickAwaySlot = { selectingForHome = false },
                         onRandomize = onRandomizeTeams,
-                        onOpenTactics = { showTactics = true }
+                        onOpenTactics = { showTactics = true },
+                        onOpenAiCoach = { showAiCoach = true }
                     )
 
                     // Team Selection Strip
@@ -408,6 +422,20 @@ fun HomeLobbyScreen(
             onClose = { showTactics = false }
         )
     }
+    if (showAiCoach) {
+        AiCoachOverlay(
+            homeTeam = homeTeam,
+            awayTeam = awayTeam,
+            formation = lobbyFormation,
+            aiState = aiCoachState,
+            onAskQuestion = onAskAiCoach,
+            onRetryLast = onRetryAiCoach,
+            onClose = {
+                showAiCoach = false
+                onResetAiCoach()
+            }
+        )
+    }
     }
 }
 
@@ -420,7 +448,8 @@ private fun MatchupPreviewCard(
     onPickHomeSlot: () -> Unit,
     onPickAwaySlot: () -> Unit,
     onRandomize: () -> Unit,
-    onOpenTactics: () -> Unit
+    onOpenTactics: () -> Unit,
+    onOpenAiCoach: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -598,6 +627,33 @@ private fun MatchupPreviewCard(
                         maxLines = 1
                     )
                 }
+            }
+
+            Button(
+                onClick = onOpenAiCoach,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("open_ai_coach_button"),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ElectricCyan.copy(alpha = 0.16f),
+                    contentColor = ElectricCyan
+                ),
+                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.55f))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "المدرب الذكي (خطة ونصائح المباراة)",
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }

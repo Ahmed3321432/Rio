@@ -36,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Pause
@@ -70,6 +71,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.ai.AiCoachUiState
 import com.example.model.Difficulty
 import com.example.model.FormationType
 import com.example.model.GameSettings
@@ -78,6 +80,7 @@ import com.example.model.MatchPhase
 import com.example.model.MatchState
 import com.example.model.SquadPlayer
 import com.example.model.TeamSide
+import com.example.ui.components.AiCoachOverlay
 import com.example.ui.components.AudioAndGraphicsPanel
 import com.example.ui.components.DynamicScoreboard
 import com.example.ui.components.MatchTouchControls
@@ -121,9 +124,15 @@ fun MatchScreen(
     onShowPassIndicatorChange: (Boolean) -> Unit,
     onSelectFormation: (FormationType) -> Unit,
     onSwapStarters: (Int, Int) -> Unit,
-    onSubstitutePlayer: (Int, Int) -> Unit
+    onSubstitutePlayer: (Int, Int) -> Unit,
+    aiCoachState: AiCoachUiState,
+    onAnalyzeMatchWithAi: () -> Unit,
+    onAskAiCoach: (String) -> Unit,
+    onRetryAiCoach: () -> Unit,
+    onResetAiCoach: () -> Unit
 ) {
     var showTactics by remember { mutableStateOf(false) }
+    var showAiCoach by remember { mutableStateOf(false) }
 
     // Switch to widescreen Landscape for authentic PES/FIFA gameplay
     val context = LocalContext.current
@@ -138,6 +147,10 @@ fun MatchScreen(
 
     BackHandler {
         when {
+            showAiCoach -> {
+                showAiCoach = false
+                onResetAiCoach()
+            }
             showTactics -> showTactics = false
             matchState.phase == MatchPhase.PAUSED -> onResume()
             matchState.phase == MatchPhase.FULL_TIME -> onExitToLobby()
@@ -324,8 +337,27 @@ fun MatchScreen(
         if (matchState.phase == MatchPhase.FULL_TIME) {
             FullTimeOverlay(
                 matchState = matchState,
+                onAnalyzeMatchWithAi = {
+                    showAiCoach = true
+                    onAnalyzeMatchWithAi()
+                },
                 onRestart = onRestart,
                 onExitToLobby = onExitToLobby
+            )
+        }
+
+        if (showAiCoach) {
+            AiCoachOverlay(
+                homeTeam = matchState.homeTeam,
+                awayTeam = matchState.awayTeam,
+                formation = matchState.homeFormation,
+                aiState = aiCoachState,
+                onAskQuestion = onAskAiCoach,
+                onRetryLast = onRetryAiCoach,
+                onClose = {
+                    showAiCoach = false
+                    onResetAiCoach()
+                }
             )
         }
     }
@@ -594,6 +626,7 @@ private fun PauseOverlay(
 @Composable
 private fun FullTimeOverlay(
     matchState: MatchState,
+    onAnalyzeMatchWithAi: () -> Unit,
     onRestart: () -> Unit,
     onExitToLobby: () -> Unit
 ) {
@@ -683,6 +716,24 @@ private fun FullTimeOverlay(
                         FullTimeStatLine("الركنيات", "${matchState.stats.homeCorners}", "${matchState.stats.awayCorners}")
                         FullTimeStatLine("الافتكاك", "${matchState.stats.homeTackles}", "${matchState.stats.awayTackles}")
                     }
+                }
+
+                Button(
+                    onClick = onAnalyzeMatchWithAi,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("fulltime_ai_analysis_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ElectricCyan.copy(alpha = 0.18f),
+                        contentColor = ElectricCyan
+                    ),
+                    border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.6f))
+                ) {
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("تحليل المدرب الذكي", style = MaterialTheme.typography.labelLarge)
                 }
 
                 Row(

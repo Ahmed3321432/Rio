@@ -11,6 +11,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.ai.configureAppCheck
 import com.example.ui.AppScreen
 import com.example.ui.FootballViewModel
 import com.example.ui.screens.HomeLobbyScreen
@@ -20,6 +21,7 @@ import com.example.ui.theme.KickChampionsTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureAppCheck(this, intent)
         enableEdgeToEdge()
         setContent {
             KickChampionsTheme {
@@ -31,6 +33,7 @@ class MainActivity : ComponentActivity() {
                     val matchState by vm.matchState.collectAsStateWithLifecycle()
                     val lobbyFormation by vm.lobbyFormation.collectAsStateWithLifecycle()
                     val lobbyLineup by vm.lobbyLineup.collectAsStateWithLifecycle()
+                    val aiCoachState by vm.aiCoachState.collectAsStateWithLifecycle()
 
                     Crossfade(targetState = screen, label = "screen_transition") { current ->
                         when (current) {
@@ -54,6 +57,10 @@ class MainActivity : ComponentActivity() {
                                     onDifficultySelected = vm::setDifficulty,
                                     onShowPassIndicatorChange = vm::setShowPassIndicator,
                                     onMatchDurationSelected = vm::setMatchDuration,
+                                    aiCoachState = aiCoachState,
+                                    onAskAiCoach = vm::askAiCoach,
+                                    onRetryAiCoach = vm::retryAiCoach,
+                                    onResetAiCoach = vm::resetAiCoach,
                                     onStartMatch = vm::startMatch
                                 )
                             }
@@ -84,7 +91,12 @@ class MainActivity : ComponentActivity() {
                                     onShowPassIndicatorChange = vm::setShowPassIndicator,
                                     onSelectFormation = vm::setMatchFormation,
                                     onSwapStarters = vm::swapMatchStarters,
-                                    onSubstitutePlayer = vm::substituteMatchPlayer
+                                    onSubstitutePlayer = vm::substituteMatchPlayer,
+                                    aiCoachState = aiCoachState,
+                                    onAnalyzeMatchWithAi = vm::analyzeMatchWithAi,
+                                    onAskAiCoach = vm::askAiCoach,
+                                    onRetryAiCoach = vm::retryAiCoach,
+                                    onResetAiCoach = vm::resetAiCoach
                                 )
                             }
                         }

@@ -590,6 +590,7 @@ object FootballEngine {
         var passInFlightId = if (ball.ownerId == null && state.passInFlightTimer > 0f) state.passInFlightTargetId else null
         val nextPassInFlightTimer = if (passInFlightId != null) (state.passInFlightTimer - dt).coerceAtLeast(0f) else 0f
         if (nextPassInFlightTimer <= 0f) passInFlightId = null
+        val ballCarrier = ball.ownerId?.let { id -> players.firstOrNull { it.id == id } }
 
         // Step all 22 players
         for (idx in players.indices) {
@@ -679,11 +680,14 @@ object FootballEngine {
                     (p.id == nearestAwayId || p.id == secondAwayId)
                 val aiVel = computeAiDesiredVelocity(
                     player = p,
+                    allPlayers = players,
                     ball = ball,
+                    carrier = ballCarrier,
                     homeAttacksRight = state.homeAttacksRight,
                     isChaser = (p.id == nearestHomeId || p.id == nearestAwayId || isAwayAttackerPress),
                     isLeadAwayChaser = (p.id == nearestAwayId && homeHasBall),
                     carrierIdleSeconds = nextCarrierIdleSeconds,
+                    timeSec = state.remainingSeconds,
                     difficulty = difficulty,
                     baseSpeed = baseSpeed
                 )
@@ -692,7 +696,7 @@ object FootballEngine {
                 val aiTargetSpeed = hypot(desiredVx, desiredVy)
                 stamina = when {
                     aiTargetSpeed > baseSpeed * 1.06f -> (stamina - dt * 0.14f).coerceAtLeast(0.05f)
-                    aiTargetSpeed < 1.2f -> (stamina + dt * 0.24f).coerceAtMost(1f)
+                    aiTargetSpeed < baseSpeed * 0.42f -> (stamina + dt * 0.24f).coerceAtMost(1f)
                     else -> (stamina + dt * 0.12f).coerceAtMost(1f)
                 }
 
@@ -702,15 +706,23 @@ object FootballEngine {
                         val decision = evaluateAwayBallAction(p, players, difficulty, state.awayTeam, awayAttacksRight)
                         if (decision == AiBallDecision.SHOOT) {
                             val goalX = if (awayAttacksRight) FIELD_RIGHT + 1f else FIELD_LEFT - 1f
-                            val targetY = CENTER_Y + (rng.nextFloat() - 0.5f) * 13f
-                            ball = launchShot(p, goalX, targetY, 0.80f, state.awayTeam)
-                            stats = stats.copy(awayShots = stats.awayShots + 1)
+                            val homeGk = players.firstOrNull { it.teamSide == TeamSide.HOME && it.role == PlayerRole.GK }
+                            val farCornerY = if (homeGk != null && homeGk.y < CENTER_Y) {
+                                GOAL_BOTTOM - 2.0f - rng.nextFloat() * 3.5f
+                            } else {
+                                GOAL_TOP + 2.0f + rng.nextFloat() * 3.5f
+                            }
+                            ball = launchShot(p, goalX, farCornerY, 0.82f, state.awayTeam)
+                            val onTarget = farCornerY in GOAL_TOP..GOAL_BOTTOM
+                            stats = stats.copy(
+                                awayShots = stats.awayShots + 1,
+                                awayShotsOnTarget = stats.awayShotsOnTarget + if (onTarget) 1 else 0
+                            )
                             eventsOut += EngineEvent.Kick(0.88f)
                             players[idx] = p.copy(kickAnimTimer = 0.22f, tackleCooldown = 0.4f)
                             continue
                         } else if (decision == AiBallDecision.PASS) {
-                            val dir = if (awayAttacksRight) 1f else -1f
-                            val mate = findBestPassTarget(p, players, dir, (rng.nextFloat() - 0.5f))
+                            val mate = findBestAiPassTarget(p, players, awayAttacksRight)
                             if (mate != null) {
                                 ball = launchPass(p, mate)
                                 eventsOut += EngineEvent.Pass
@@ -719,9 +731,10 @@ object FootballEngine {
                             }
                         }
                     } else if (p.role == PlayerRole.GK) {
-                        // Home GK distributes quickly to a teammate
-                        val mate = players.filter { it.teamSide == TeamSide.HOME && it.role != PlayerRole.GK }
-                            .minByOrNull { hypot(it.x - p.x, it.y - p.y) }
+                        // Home GK distributes smartly to an open defender/midfielder
+                        val mate = findBestAiPassTarget(p, players, state.homeAttacksRight)
+                            ?: players.filter { it.teamSide == TeamSide.HOME && it.role != PlayerRole.GK }
+                                .minByOrNull { hypot(it.x - p.x, it.y - p.y) }
                         if (mate != null) {
                             ball = launchPass(p, mate)
                             eventsOut += EngineEvent.Pass
@@ -740,7 +753,34 @@ object FootballEngine {
                     if (idleTakeoverReady || aggressiveTackle) {
                         val holderIdx = players.indexOfFirst { it.id == ball.ownerId }
                         if (holderIdx >= 0) {
-                            players[holderIdx] = players[holderIdx].copy(stunTimer = 0.72f, tackleCooldown = 0.5f)
+                            val holder = players[holderIdx]
+                            val distHolder = hypot(p.x - holder.x, p.y - holder.y)
+                            val awayLateFoul = !idleTakeoverReady &&
+                                distToBall > 3.25f &&
+                                distHolder < 1.9f &&
+                                rng.nextFloat() < 0.06f
+                            if (awayLateFoul) {
+                                eventsOut += EngineEvent.Whistle
+                                val inAwayPenaltyBox = isInsidePenaltyBox(holder.x, holder.y, isLeftBox = !state.homeAttacksRight)
+                                return state.copy(
+                                    phase = MatchPhase.SET_PIECE,
+                                    setPieceType = if (inAwayPenaltyBox) SetPieceType.PENALTY else SetPieceType.FREE_KICK,
+                                    setPieceTeam = TeamSide.HOME,
+                                    setPieceTimer = 1.15f,
+                                    setPieceX = holder.x,
+                                    setPieceY = holder.y,
+                                    remainingSeconds = nextRemaining,
+                                    carrierIdleSeconds = 0f,
+                                    lastBallOwnerId = null,
+                                    bannerMessage = if (inAwayPenaltyBox) "ركلة جزاء لك!" else "خطأ على الخصم! ركلة حرة",
+                                    bannerTimer = 1.25f,
+                                    stats = stats.copy(awayFouls = stats.awayFouls + 1),
+                                    particles = nextParticles,
+                                    cameraX = nextCamX,
+                                    cameraY = nextCamY
+                                )
+                            }
+                            players[holderIdx] = holder.copy(stunTimer = 0.72f, tackleCooldown = 0.5f)
                             // If taking over cleanly after 2s idle pause, snap attacker cleanly onto ball spot
                             if (idleTakeoverReady && distToBall > 2.2f) {
                                 players[idx] = p.copy(
@@ -765,7 +805,6 @@ object FootballEngine {
             val vx = p.vx + (desiredVx - p.vx) * blend
             val vy = p.vy + (desiredVy - p.vy) * blend
             val speedMag = hypot(vx, vy)
-            val newFacing = if (speedMag > 1.0f && nextSlide <= 0f) atan2(vy, vx) else p.facingAngle
 
             val minX = if (p.role == PlayerRole.GK) {
                 val gkLeftSide = (p.teamSide == TeamSide.HOME && state.homeAttacksRight) ||
@@ -781,6 +820,13 @@ object FootballEngine {
 
             val nx = (p.x + vx * dt).coerceIn(minX, maxX)
             val ny = (p.y + vy * dt).coerceIn(FIELD_TOP + 1f, FIELD_BOTTOM - 1f)
+            val newFacing = when {
+                nextSlide > 0f -> p.facingAngle
+                speedMag > 1.8f -> atan2(vy, vx)
+                !isHuman -> atan2(ball.y - ny, ball.x - nx)
+                speedMag > 0.6f -> atan2(vy, vx)
+                else -> p.facingAngle
+            }
             val nextStride = if (speedMag > 1.4f && nextSlide <= 0f) p.stridePhase + dt * speedMag * 0.45f else p.stridePhase
 
             // Human standing tackle / interception on contact or while holding Sprint+Press or Double-Press
@@ -1585,36 +1631,84 @@ object FootballEngine {
         }
     }
 
+    private fun findBestAiPassTarget(
+        passer: PlayerEntity,
+        players: List<PlayerEntity>,
+        teamAttacksRight: Boolean
+    ): PlayerEntity? {
+        val attackDir = if (teamAttacksRight) 1f else -1f
+        val opponents = players.filter { it.teamSide != passer.teamSide }
+        val candidates = players.filter {
+            it.teamSide == passer.teamSide && it.id != passer.id && it.role != PlayerRole.GK
+        }
+        return candidates.maxByOrNull { mate ->
+            val dx = mate.x - passer.x
+            val dy = mate.y - passer.y
+            val dist = hypot(dx, dy).coerceAtLeast(1f)
+            val forwardGain = (dx * attackDir)
+            val nearestOppDist = opponents.minOfOrNull { hypot(it.x - mate.x, it.y - mate.y) } ?: 25f
+            val spaceScore = nearestOppDist.coerceAtMost(22f) * 1.4f
+            val idealDistScore = if (dist in 16f..68f) 14f else -abs(dist - 40f) * 0.25f
+            val roleAttackBonus = when (mate.role) {
+                PlayerRole.FWD -> 8f
+                PlayerRole.MID -> 5f
+                else -> 0f
+            }
+            forwardGain * 0.55f + spaceScore + idealDistScore + roleAttackBonus
+        }
+    }
+
     private fun computeAiDesiredVelocity(
         player: PlayerEntity,
+        allPlayers: List<PlayerEntity>,
         ball: BallEntity,
+        carrier: PlayerEntity?,
         homeAttacksRight: Boolean,
         isChaser: Boolean,
         isLeadAwayChaser: Boolean,
         carrierIdleSeconds: Float,
+        timeSec: Float,
         difficulty: Difficulty,
         baseSpeed: Float
     ): Pair<Float, Float> {
-        val speedScale = if (player.teamSide == TeamSide.AWAY) difficulty.aiSpeedScale else 0.90f
+        val speedScale = if (player.teamSide == TeamSide.AWAY) difficulty.aiSpeedScale else 0.92f
         val maxV = baseSpeed * speedScale
         val teamAttacksRight = if (player.teamSide == TeamSide.HOME) homeAttacksRight else !homeAttacksRight
+        val shiftDir = if (teamAttacksRight) 1f else -1f
+        val oppGoalX = if (teamAttacksRight) FIELD_RIGHT else FIELD_LEFT
+        val ownGoalX = if (teamAttacksRight) FIELD_LEFT else FIELD_RIGHT
+        val opponents = allPlayers.filter { it.teamSide != player.teamSide && it.role != PlayerRole.GK }
 
         if (player.role == PlayerRole.GK) {
-            val goalX = if (teamAttacksRight) FIELD_LEFT + 4.5f else FIELD_RIGHT - 4.5f
+            val goalX = if (teamAttacksRight) FIELD_LEFT + 4.8f else FIELD_RIGHT - 4.8f
+            val ballInOwnHalf = if (teamAttacksRight) ball.x < CENTER_X else ball.x > CENTER_X
+            val sweepStep = if (ballInOwnHalf) shiftDir * 2.2f else 0f
             val rushZone = if (teamAttacksRight) ball.x < FIELD_LEFT + 28f else ball.x > FIELD_RIGHT - 28f
             val targetY = if (rushZone && ball.ownerId == null) {
                 ball.y.coerceIn(GOAL_TOP - 3f, GOAL_BOTTOM + 3f)
             } else {
-                ball.y.coerceIn(GOAL_TOP + 2f, GOAL_BOTTOM - 2f)
+                (CENTER_Y + (ball.y - CENTER_Y) * 0.26f).coerceIn(GOAL_TOP + 1.8f, GOAL_BOTTOM - 1.8f)
             }
-            val targetX = if (rushZone && ball.ownerId == null) ball.x else goalX
+            val targetX = if (rushZone && ball.ownerId == null) ball.x else (goalX + sweepStep)
             return seek(player.x, player.y, targetX, targetY, maxV * 0.96f)
         }
 
+        // Ball carrier (Away AI): weave around oncoming defenders instead of running straight into them
         if (ball.ownerId == player.id) {
-            val goalX = if (teamAttacksRight) FIELD_RIGHT - 10f else FIELD_LEFT + 10f
-            val targetY = if (player.y < CENTER_Y - 18f) CENTER_Y - 10f else if (player.y > CENTER_Y + 18f) CENTER_Y + 10f else player.y
-            return seek(player.x, player.y, goalX, targetY, maxV * 0.94f)
+            val goalX = if (teamAttacksRight) FIELD_RIGHT - 12f else FIELD_LEFT + 12f
+            var targetY = when {
+                player.y < CENTER_Y - 18f -> CENTER_Y - 10f
+                player.y > CENTER_Y + 18f -> CENTER_Y + 10f
+                else -> player.y
+            }
+            val blocker = opponents
+                .filter { ((it.x - player.x) * shiftDir) in -2f..15f && abs(it.y - player.y) < 9.5f }
+                .minByOrNull { hypot(it.x - player.x, it.y - player.y) }
+            if (blocker != null) {
+                val dodgeSign = if (player.y <= blocker.y) -1f else 1f
+                targetY = (player.y + dodgeSign * 14f).coerceIn(FIELD_TOP + 12f, FIELD_BOTTOM - 12f)
+            }
+            return seek(player.x, player.y, goalX, targetY, maxV * 0.95f)
         }
 
         val teamHasBall = ball.ownerId?.startsWith(if (player.teamSide == TeamSide.HOME) "home_" else "away_") == true
@@ -1627,14 +1721,179 @@ object FootballEngine {
             return seek(player.x, player.y, ball.x, ball.y, maxV * pressUrgency)
         }
 
-        // Dynamic tactical shifting along X axis with ball across the 250u pitch
-        val shiftDir = if (teamAttacksRight) 1f else -1f
-        val attackPush = if (teamHasBall) shiftDir * 34f else -shiftDir * 16f
-        val ballFollowX = (ball.x - CENTER_X) * 0.36f
-        val ballFollowY = (ball.y - CENTER_Y) * 0.24f
-        val targetX = (player.homeX + attackPush + ballFollowX).coerceIn(FIELD_LEFT + 10f, FIELD_RIGHT - 10f)
-        val targetY = (player.homeY + ballFollowY).coerceIn(FIELD_TOP + 8f, FIELD_BOTTOM - 8f)
-        return seek(player.x, player.y, targetX, targetY, maxV * 0.88f)
+        // Dynamic role-based off-ball movement (never stand frozen!)
+        val code = player.slotCode.uppercase()
+        val phaseSeed = (player.jerseyNumber * 1.37f + player.homeY * 0.09f)
+        val organicX = sin(timeSec * 1.45f + phaseSeed)
+        val organicY = cos(timeSec * 1.75f + phaseSeed)
+        val ballFactorX = (ball.x - CENTER_X) * 0.42f
+        val ballFactorY = (ball.y - CENTER_Y) * 0.28f
+        val isLeftFlank = player.homeY < CENTER_Y
+        val ballOnMyFlank = (isLeftFlank && ball.y < CENTER_Y - 10f) || (!isLeftFlank && ball.y > CENTER_Y + 10f)
+        val carrierX = carrier?.x ?: ball.x
+
+        var targetX: Float
+        var targetY: Float
+        var roleUrgency = 0.90f
+
+        if (teamHasBall) {
+            // ==================== IN POSSESSION (ATTACKING MOVEMENT BY ROLE) ====================
+            when {
+                // Center backs hold a steady progressive line & spread slightly for back-pass angles
+                code == "CB" || code == "LCB" || code == "RCB" -> {
+                    val pushLimit = if (teamAttacksRight) CENTER_X + 8f else CENTER_X - 8f
+                    val rawX = player.homeX + shiftDir * 24f + ballFactorX * 0.55f
+                    targetX = if (teamAttacksRight) rawX.coerceAtMost(pushLimit) else rawX.coerceAtLeast(pushLimit)
+                    targetY = player.homeY + (ball.y - CENTER_Y) * 0.16f + organicY * 2.2f
+                    roleUrgency = 0.80f
+                }
+
+                // Fullbacks & Wingbacks: overlap aggressively on ball-side flank, tuck in on weak side
+                code == "LB" || code == "RB" || code == "LWB" || code == "RWB" -> {
+                    val isWingBack = code.endsWith("WB")
+                    if (ballOnMyFlank) {
+                        // Overlapping wing run ahead of or parallel to ball
+                        targetX = maxOf(player.homeX + shiftDir * 44f, carrierX + shiftDir * (if (isWingBack) 26f else 18f))
+                            .let { if (teamAttacksRight) it else minOf(player.homeX + shiftDir * 44f, carrierX + shiftDir * (if (isWingBack) 26f else 18f)) }
+                        val flankY = if (isLeftFlank) FIELD_TOP + 11f else FIELD_BOTTOM - 11f
+                        targetY = flankY + organicY * 2.5f
+                        roleUrgency = 0.96f
+                    } else {
+                        targetX = player.homeX + shiftDir * 30f + ballFactorX * 0.45f
+                        targetY = (player.homeY * 0.78f + CENTER_Y * 0.22f) + (ball.y - CENTER_Y) * 0.18f + organicY * 2.2f
+                        roleUrgency = 0.84f
+                    }
+                }
+
+                // Holding Midfielders: orbit behind the ball as a safe central pivot in passing triangles
+                code == "CDM" || code == "LDM" || code == "RDM" -> {
+                    targetX = (carrierX - shiftDir * 18f + organicX * 3.5f)
+                        .let { raw -> (raw * 0.55f + (player.homeX + shiftDir * 28f + ballFactorX * 0.4f) * 0.45f) }
+                    targetY = player.homeY + (ball.y - player.homeY) * 0.34f + organicY * 4.5f
+                    roleUrgency = 0.88f
+                }
+
+                // Central & Attacking Midfielders: move into open half-spaces / passing lanes ahead of the ball
+                player.role == PlayerRole.MID && !code.startsWith("L") && !code.startsWith("R") -> {
+                    val pushAhead = if (code == "CAM") 28f else 16f
+                    targetX = (carrierX + shiftDir * pushAhead + organicX * 5.5f)
+                        .let { (it * 0.50f + (player.homeX + shiftDir * 42f + ballFactorX * 0.5f) * 0.50f) }
+                    targetY = player.homeY + (ball.y - CENTER_Y) * 0.30f + organicY * 7.5f
+                    roleUrgency = 0.93f
+                }
+
+                // Wide Midfielders / Wingers (LM, RM, LAM, RAM, LW, RW): stretch touchline or cut inside to far post
+                code == "LM" || code == "RM" || code == "LAM" || code == "RAM" || code == "LW" || code == "RW" -> {
+                    val wideBaseY = if (isLeftFlank) FIELD_TOP + 13f else FIELD_BOTTOM - 13f
+                    val inFinalThird = abs(oppGoalX - carrierX) < 72f
+                    if (ballOnMyFlank) {
+                        // Burst forward down channel or diagonally inward near the box
+                        targetX = carrierX + shiftDir * 26f + organicX * 4f
+                        targetY = if (inFinalThird) {
+                            (wideBaseY * 0.65f + CENTER_Y * 0.35f) + organicY * 3.5f
+                        } else {
+                            wideBaseY + organicY * 3.0f
+                        }
+                    } else if (inFinalThird) {
+                        // Weak-side winger attacks the back post!
+                        targetX = oppGoalX - shiftDir * 20f + organicX * 4f
+                        targetY = (if (isLeftFlank) GOAL_TOP - 4f else GOAL_BOTTOM + 4f) + organicY * 3.5f
+                    } else {
+                        // Hold wide width to stretch defense and invite switch of play
+                        targetX = maxOf(player.homeX + shiftDir * 44f, carrierX + shiftDir * 14f)
+                            .let { if (teamAttacksRight) it else minOf(player.homeX + shiftDir * 44f, carrierX + shiftDir * 14f) }
+                        targetY = wideBaseY + organicY * 4.5f
+                    }
+                    roleUrgency = 0.98f
+                }
+
+                // Strikers (ST, LST, RST): time penetrating runs off the defensive line + check into pockets
+                else -> {
+                    val oppDefX = opponents
+                        .filter { it.role == PlayerRole.DEF }
+                        .let { defs ->
+                            if (defs.isEmpty()) oppGoalX - shiftDir * 46f
+                            else if (teamAttacksRight) defs.maxOf { it.x } else defs.minOf { it.x }
+                        }
+                    val sprintInBehind = sin(timeSec * 1.15f + phaseSeed) > -0.15f
+                    val shoulderOffset = if (sprintInBehind) shiftDir * 9f else -shiftDir * 6f
+                    val desiredLineX = oppDefX + shoulderOffset + organicX * 4f
+                    val deepMinX = carrierX + shiftDir * 18f
+                    targetX = if (teamAttacksRight) {
+                        maxOf(desiredLineX, deepMinX).coerceAtMost(oppGoalX - 10f)
+                    } else {
+                        minOf(desiredLineX, deepMinX).coerceAtLeast(oppGoalX + 10f)
+                    }
+                    // Drift into open channel away from closest center back
+                    val nearestMarker = opponents.minByOrNull { hypot(it.x - player.x, it.y - player.y) }
+                    val evadeY = if (nearestMarker != null && hypot(nearestMarker.x - player.x, nearestMarker.y - player.y) < 12f) {
+                        if (player.y <= nearestMarker.y) -7f else 7f
+                    } else 0f
+                    targetY = (player.homeY + (ball.y - CENTER_Y) * 0.22f + evadeY + organicY * 6.5f)
+                    roleUrgency = 1.00f
+                }
+            }
+        } else {
+            // ==================== OUT OF POSSESSION (DEFENSIVE SHAPE & TRACKING BY ROLE) ====================
+            when {
+                // Center backs maintain a compact central backline & mark attackers threatening the box
+                code == "CB" || code == "LCB" || code == "RCB" -> {
+                    val goalGuardX = ownGoalX + shiftDir * 30f
+                    val rawLineX = player.homeX - shiftDir * 16f + ballFactorX * 0.55f
+                    targetX = if (teamAttacksRight) rawLineX.coerceAtLeast(goalGuardX) else rawLineX.coerceAtMost(goalGuardX)
+                    val ballPullY = (ball.y - CENTER_Y) * 0.34f
+                    val dangerousAttacker = opponents.firstOrNull { opp ->
+                        abs(opp.x - targetX) < 16f && abs(opp.y - (player.homeY + ballPullY)) < 14f
+                    }
+                    targetY = if (dangerousAttacker != null) {
+                        (dangerousAttacker.y * 0.55f + (player.homeY + ballPullY) * 0.45f) + organicY * 1.4f
+                    } else {
+                        (player.homeY * 0.88f + CENTER_Y * 0.12f) + ballPullY + organicY * 1.8f
+                    }
+                    roleUrgency = 0.88f
+                }
+
+                // Fullbacks tuck inside defensively & track wide threats
+                code == "LB" || code == "RB" || code == "LWB" || code == "RWB" -> {
+                    targetX = player.homeX - shiftDir * 18f + ballFactorX * 0.58f
+                    val compactY = (player.homeY * 0.72f + CENTER_Y * 0.28f) + (ball.y - CENTER_Y) * 0.30f
+                    targetY = compactY + organicY * 2.0f
+                    roleUrgency = 0.89f
+                }
+
+                // Midfielders screen central Zone 14 & shift horizontally toward ball side
+                player.role == PlayerRole.MID -> {
+                    val screenDepth = if (code.contains("DM")) -shiftDir * 24f else -shiftDir * 14f
+                    targetX = player.homeX + screenDepth + ballFactorX * 0.55f + organicX * 2.8f
+                    val compactWidth = if (code.startsWith("L") || code.startsWith("R")) 0.80f else 0.90f
+                    targetY = (player.homeY * compactWidth + CENTER_Y * (1f - compactWidth)) +
+                        (ball.y - CENTER_Y) * 0.38f + organicY * 3.0f
+                    roleUrgency = 0.90f
+                }
+
+                // Forwards hold halfway outlet / shadow opponent build-up pivot for counter-attacks
+                else -> {
+                    val midLineBias = CENTER_X + shiftDir * 12f
+                    targetX = ((player.homeX - shiftDir * 22f) * 0.55f + midLineBias * 0.45f) +
+                        ballFactorX * 0.40f + organicX * 4.2f
+                    targetY = player.homeY + (ball.y - CENTER_Y) * 0.26f + organicY * 4.5f
+                    roleUrgency = 0.82f
+                }
+            }
+        }
+
+        val clampedX = targetX.coerceIn(FIELD_LEFT + 8f, FIELD_RIGHT - 8f)
+        val clampedY = targetY.coerceIn(FIELD_TOP + 7f, FIELD_BOTTOM - 7f)
+        val dx = clampedX - player.x
+        val dy = clampedY - player.y
+        val dist = hypot(dx, dy)
+        if (dist < 1.15f) {
+            // Subtle athletic micro-jockey so off-ball players stay responsive on their toes instead of freezing
+            val microX = cos(timeSec * 3.1f + phaseSeed) * (maxV * 0.14f)
+            val microY = sin(timeSec * 2.6f + phaseSeed) * (maxV * 0.14f)
+            return microX to microY
+        }
+        return seek(player.x, player.y, clampedX, clampedY, maxV * roleUrgency)
     }
 
     private enum class AiBallDecision { DRIBBLE, PASS, SHOOT }
@@ -1648,13 +1907,25 @@ object FootballEngine {
     ): AiBallDecision {
         val distToGoal = if (awayAttacksRight) FIELD_RIGHT - carrier.x else carrier.x - FIELD_LEFT
         if (distToGoal < 56f && abs(carrier.y - CENTER_Y) < 38f) {
-            val shootChance = (0.048f + (awayTeam.attack - 80) * 0.002f) * difficulty.aiReactionScale
+            val shootChance = (0.052f + (awayTeam.attack - 80) * 0.002f) * difficulty.aiReactionScale
             if (rng.nextFloat() < shootChance) return AiBallDecision.SHOOT
         }
+        val attackDir = if (awayAttacksRight) 1f else -1f
         val pressured = players.any {
-            it.teamSide == TeamSide.HOME && hypot(it.x - carrier.x, it.y - carrier.y) < 11.5f
+            it.teamSide == TeamSide.HOME && hypot(it.x - carrier.x, it.y - carrier.y) < 12.5f
         }
-        if (pressured && rng.nextFloat() < 0.075f * difficulty.aiReactionScale) {
+        if (pressured && rng.nextFloat() < 0.095f * difficulty.aiReactionScale) {
+            return AiBallDecision.PASS
+        }
+        // Proactive progressive passing when a forward or winger makes an open run ahead
+        val hasOpenForwardRunner = players.any { mate ->
+            mate.teamSide == TeamSide.AWAY &&
+                mate.id != carrier.id &&
+                mate.role != PlayerRole.GK &&
+                (mate.x - carrier.x) * attackDir > 18f &&
+                players.none { opp -> opp.teamSide == TeamSide.HOME && hypot(opp.x - mate.x, opp.y - mate.y) < 10f }
+        }
+        if (hasOpenForwardRunner && rng.nextFloat() < 0.036f * difficulty.aiReactionScale) {
             return AiBallDecision.PASS
         }
         return AiBallDecision.DRIBBLE

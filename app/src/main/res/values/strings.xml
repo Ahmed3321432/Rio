@@ -30,4 +30,14 @@
     <string name="you_win">فوز مستحق!</string>
     <string name="you_lose">حظ أوفر!</string>
     <string name="draw_result">تعادل مثير!</string>
+    <string name="match_stats_title">إحصائيات المباراة المباشرة</string>
+    <string name="stats_possession">الاستحواذ</string>
+    <string name="stats_shots_on_target">تسديدات على المرمى</string>
+    <string name="stats_total_shots">إجمالي التسديدات</string>
+    <string name="stats_fouls">الأخطاء</string>
+    <string name="stats_tackles">الافتكاك</string>
+    <string name="stats_corners">الركنيات</string>
+    <string name="stats_live_badge">مباشر</string>
+    <string name="stats_close_cd">إغلاق الإحصائيات</string>
+    <string name="stats_toggle_cd">عرض إحصائيات المباراة</string>
 </resources>

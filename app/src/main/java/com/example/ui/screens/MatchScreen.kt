@@ -33,6 +33,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Mic
@@ -80,6 +81,8 @@ import com.example.model.TeamSide
 import com.example.ui.components.AiCoachOverlay
 import com.example.ui.components.AudioAndGraphicsPanel
 import com.example.ui.components.DynamicScoreboard
+import com.example.ui.components.LiveStatsMiniStrip
+import com.example.ui.components.MatchStatsOverlay
 import com.example.ui.components.MatchTouchControls
 import com.example.ui.components.PitchCanvas
 import com.example.ui.components.PitchRadarOverlay
@@ -136,6 +139,7 @@ fun MatchScreen(
 ) {
     var showTactics by remember { mutableStateOf(false) }
     var showAiCoach by remember { mutableStateOf(false) }
+    var showStatsOverlay by remember { mutableStateOf(false) }
 
     BackHandler {
         when {
@@ -144,6 +148,7 @@ fun MatchScreen(
                 onResetAiCoach()
             }
             showTactics -> showTactics = false
+            showStatsOverlay -> showStatsOverlay = false
             matchState.phase == MatchPhase.PAUSED -> onResume()
             matchState.phase == MatchPhase.FULL_TIME -> onExitToLobby()
             else -> onPause()
@@ -164,10 +169,12 @@ fun MatchScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Broadcast Top HUD (Scoreboard on Left, Camera, Audio, Tactics & Pause on Right)
+        // Broadcast Top HUD (Scoreboard + Live Stats Strip on Left, Camera, Audio, Stats, Tactics & Pause on Right)
         MatchBroadcastTopHud(
             matchState = matchState,
             settings = settings,
+            showStatsOverlay = showStatsOverlay,
+            onToggleStatsOverlay = { showStatsOverlay = !showStatsOverlay },
             onVolumeDown = onVolumeDown,
             onVolumeUp = onVolumeUp,
             onToggleMute = onToggleMute,
@@ -177,10 +184,14 @@ fun MatchScreen(
                 onCameraDistanceSelected(next)
             },
             onOpenTactics = {
+                showStatsOverlay = false
                 onPause()
                 showTactics = true
             },
-            onPause = onPause,
+            onPause = {
+                showStatsOverlay = false
+                onPause()
+            },
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
@@ -374,6 +385,21 @@ fun MatchScreen(
             )
         }
 
+        // Expandable Live Match Statistics Overlay during gameplay
+        AnimatedVisibility(
+            visible = showStatsOverlay && matchState.phase != MatchPhase.PAUSED && matchState.phase != MatchPhase.FULL_TIME && matchState.phase != MatchPhase.HALF_TIME && !showTactics,
+            enter = scaleIn(
+                initialScale = 0.92f,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
+            ) + fadeIn(),
+            exit = scaleOut(targetScale = 0.94f) + fadeOut()
+        ) {
+            MatchStatsOverlay(
+                matchState = matchState,
+                onDismiss = { showStatsOverlay = false }
+            )
+        }
+
         // Full-Time Results Overlay
         if (matchState.phase == MatchPhase.FULL_TIME) {
             FullTimeOverlay(
@@ -408,6 +434,8 @@ fun MatchScreen(
 private fun MatchBroadcastTopHud(
     matchState: MatchState,
     settings: GameSettings,
+    showStatsOverlay: Boolean,
+    onToggleStatsOverlay: () -> Unit,
     onVolumeDown: () -> Unit,
     onVolumeUp: () -> Unit,
     onToggleMute: () -> Unit,
@@ -423,12 +451,27 @@ private fun MatchBroadcastTopHud(
                 .statusBarsPadding()
                 .padding(horizontal = 14.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.Top
         ) {
-            // Real-Time Dynamic Broadcast Scoreboard
-            DynamicScoreboard(matchState = matchState)
+            // Left: Real-Time Dynamic Broadcast Scoreboard + Live Mini Stats Strip
+            Column(
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalAlignment = Alignment.Start
+            ) {
+                DynamicScoreboard(matchState = matchState)
+                if (matchState.phase == MatchPhase.PLAYING ||
+                    matchState.phase == MatchPhase.PRE_KICKOFF ||
+                    matchState.phase == MatchPhase.SET_PIECE ||
+                    matchState.phase == MatchPhase.GOAL_CELEBRATION
+                ) {
+                    LiveStatsMiniStrip(
+                        matchState = matchState,
+                        onExpandClick = onToggleStatsOverlay
+                    )
+                }
+            }
 
-            // Right: Live Volume -/Mute/+ & Pause
+            // Right: Live Volume -/Mute/+, Camera, Live Stats Toggle, Tactics & Pause
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -497,6 +540,23 @@ private fun MatchBroadcastTopHud(
                             style = MaterialTheme.typography.labelMedium,
                             color = Color.White,
                             fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = CircleShape,
+                    color = if (showStatsOverlay) ElectricCyan.copy(alpha = 0.24f) else StadiumObsidian.copy(alpha = 0.84f),
+                    border = BorderStroke(1.dp, ElectricCyan.copy(alpha = if (showStatsOverlay) 0.95f else 0.55f))
+                ) {
+                    IconButton(
+                        onClick = onToggleStatsOverlay,
+                        modifier = Modifier.size(48.dp).testTag("hud_stats_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BarChart,
+                            contentDescription = stringResource(R.string.stats_toggle_cd),
+                            tint = ElectricCyan
                         )
                     }
                 }
@@ -789,7 +849,9 @@ private fun FullTimeOverlay(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         FullTimeStatLine("الاستحواذ", "${matchState.stats.homePossessionPercent}%", "${matchState.stats.awayPossessionPercent}%")
-                        FullTimeStatLine("التسديدات", "${matchState.stats.homeShots}", "${matchState.stats.awayShots}")
+                        FullTimeStatLine("تسديدات على المرمى", "${matchState.stats.homeShotsOnTarget}", "${matchState.stats.awayShotsOnTarget}")
+                        FullTimeStatLine("إجمالي التسديدات", "${matchState.stats.homeShots}", "${matchState.stats.awayShots}")
+                        FullTimeStatLine("الأخطاء", "${matchState.stats.homeFouls}", "${matchState.stats.awayFouls}")
                         FullTimeStatLine("الركنيات", "${matchState.stats.homeCorners}", "${matchState.stats.awayCorners}")
                         FullTimeStatLine("الافتكاك", "${matchState.stats.homeTackles}", "${matchState.stats.awayTackles}")
                     }

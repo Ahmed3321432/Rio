@@ -464,4 +464,113 @@ class FootballEngineTest {
         val afterIdle = idleState.players.first { it.id == activeId }.stamina
         assertTrue("Expected stamina to regenerate faster while standing still ($afterIdle) than walking ($afterWalk)", afterIdle > afterWalk)
     }
+
+    @Test
+    fun offBallPlayersMoveActivelyByRoleInAttackAndDefense() {
+        val home = TeamCatalog.teams[0]
+        val away = TeamCatalog.teams[1]
+        var state = FootballEngine.createNewMatch(home, away, 90, FormationType.F_4_3_3)
+            .copy(phase = MatchPhase.PLAYING)
+        val events = mutableListOf<EngineEvent>()
+
+        // Give midfield carrier home_6 (CDM) the ball at midfield
+        state = state.copy(
+            activeHomePlayerId = "home_6",
+            ball = state.ball.copy(x = 120f, y = 90f, ownerId = "home_6", lastTouchTeam = TeamSide.HOME)
+        )
+
+        val initialById = state.players.associateBy { it.id }
+
+        // Step while carrier holds ball steadily: teammates should actively position by role
+        repeat(35) {
+            state = FootballEngine.step(
+                state = state,
+                dtRaw = 0.04f,
+                input = InputSnapshot(moveX = 0.25f, moveY = 0f),
+                difficulty = Difficulty.MEDIUM,
+                graphicsQuality = GraphicsQuality.HIGH,
+                eventsOut = events
+            )
+        }
+
+        val striker = state.players.first { it.id == "home_9" } // ST
+        val winger = state.players.first { it.id == "home_8" }  // LW
+        val centerBack = state.players.first { it.id == "home_2" } // CB
+
+        // Striker pushes well ahead of midfield carrier and further upfield than CB
+        assertTrue("Striker should push ahead of CB (${striker.x} vs ${centerBack.x})", striker.x > centerBack.x + 50f)
+        // Winger stays wide on the left flank
+        assertTrue("Left winger should hold wide left flank (${winger.y})", winger.y < 60f)
+        // Off-ball players should have active velocity / movement rather than frozen zero velocity
+        val stInit = initialById.getValue("home_9")
+        val movedDist = hypot(striker.x - stInit.x, striker.y - stInit.y)
+        assertTrue("Striker should actively make forward/diagonal runs (moved $movedDist)", movedDist > 4f)
+        assertTrue("Center back should stay compact behind attack (${centerBack.x})", centerBack.x < 150f)
+    }
+
+    @Test
+    fun realTimeMatchStatsTrackPossessionShotsOnTargetAndFouls() {
+        val home = TeamCatalog.teams[0]
+        val away = TeamCatalog.teams[1]
+        var state = FootballEngine.createNewMatch(home, away, 90).copy(phase = MatchPhase.PLAYING)
+        val events = mutableListOf<EngineEvent>()
+
+        // Isolate players so home_9 holds possession cleanly for 20 ticks
+        state = state.copy(
+            activeHomePlayerId = "home_9",
+            ball = state.ball.copy(x = 122f, y = 90f, ownerId = "home_9", lastTouchTeam = TeamSide.HOME),
+            players = state.players.map { p ->
+                when (p.id) {
+                    "home_9" -> p.copy(x = 120f, y = 90f, vx = 0f, vy = 0f)
+                    else -> if (p.teamSide == TeamSide.HOME) p.copy(x = 40f, y = 30f) else p.copy(x = 220f, y = 150f)
+                }
+            }
+        )
+
+        repeat(20) {
+            state = FootballEngine.step(
+                state = state,
+                dtRaw = 0.03f,
+                input = InputSnapshot(moveX = 1f, moveY = 0f),
+                difficulty = Difficulty.MEDIUM,
+                graphicsQuality = GraphicsQuality.HIGH,
+                eventsOut = events
+            )
+        }
+        assertTrue("Home possession should exceed 70% while controlling ball, got ${state.stats.homePossessionPercent}%", state.stats.homePossessionPercent > 70)
+        assertEquals(100, state.stats.homePossessionPercent + state.stats.awayPossessionPercent)
+
+        // Release a shot on target
+        state = FootballEngine.handleShootRelease(
+            state = state.copy(isChargingShot = true, shotCharge = 0.8f),
+            input = InputSnapshot(moveX = 1f, moveY = 0f),
+            graphicsQuality = GraphicsQuality.HIGH,
+            eventsOut = events
+        )
+        assertEquals(1, state.stats.homeShots)
+        assertEquals(1, state.stats.homeShotsOnTarget)
+
+        // Reckless slide tackle far behind the ball triggers foul and increments homeFouls
+        val foulSetup = state.copy(
+            activeHomePlayerId = "home_6",
+            ball = state.ball.copy(x = 160f, y = 90f, ownerId = "away_9", lastTouchTeam = TeamSide.AWAY),
+            players = state.players.map { p ->
+                when (p.id) {
+                    "away_9" -> p.copy(x = 154f, y = 90f, vx = 0f, vy = 0f)
+                    "home_6" -> p.copy(x = 152.5f, y = 90f, vx = 0f, vy = 0f, slideTimer = 0.25f, stunTimer = 0f, tackleCooldown = 0f)
+                    else -> if (p.teamSide == TeamSide.HOME) p.copy(x = 30f, y = 30f) else p.copy(x = 230f, y = 150f)
+                }
+            }
+        )
+        val afterFoul = FootballEngine.step(
+            state = foulSetup,
+            dtRaw = 0.02f,
+            input = InputSnapshot(),
+            difficulty = Difficulty.MEDIUM,
+            graphicsQuality = GraphicsQuality.HIGH,
+            eventsOut = events
+        )
+        assertEquals(1, afterFoul.stats.homeFouls)
+        assertEquals(MatchPhase.SET_PIECE, afterFoul.phase)
+    }
 }

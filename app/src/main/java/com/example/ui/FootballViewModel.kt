@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ai.AiCoachUiState
+import com.example.audio.MatchCommentaryEngine
 import com.example.audio.SoundEngine
 import com.example.data.SettingsRepository
 import com.example.engine.EngineEvent
@@ -38,14 +39,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 
 enum class AppScreen {
+    MENU,
     HOME,
-    MATCH
+    MATCH,
+    SETTINGS
 }
 
 class FootballViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = SettingsRepository(application.applicationContext)
     private val soundEngine = SoundEngine()
+    private val commentaryEngine = MatchCommentaryEngine(application.applicationContext)
+    val liveCommentary: StateFlow<String?> = commentaryEngine.activeCommentaryText
 
     val settings: StateFlow<GameSettings> = repository.settingsFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, GameSettings())
@@ -53,8 +58,10 @@ class FootballViewModel(application: Application) : AndroidViewModel(application
     val careerStats: StateFlow<CareerStats> = repository.careerStatsFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, CareerStats())
 
-    private val _currentScreen = MutableStateFlow(AppScreen.HOME)
+    private val _currentScreen = MutableStateFlow(AppScreen.MENU)
     val currentScreen: StateFlow<AppScreen> = _currentScreen.asStateFlow()
+
+    private var screenBeforeSettings: AppScreen = AppScreen.MENU
 
     private val _matchState = MutableStateFlow(MatchState())
     val matchState: StateFlow<MatchState> = _matchState.asStateFlow()
@@ -91,6 +98,7 @@ class FootballViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             settings.collect { s ->
                 soundEngine.updateVolume(s.effectiveVolume)
+                commentaryEngine.updateAudioConfig(s.effectiveVolume, s.isCommentaryEnabled)
                 if (s.homeTeamId != lastSyncedHomeTeamId) {
                     lastSyncedHomeTeamId = s.homeTeamId
                     _lobbyLineup.value = TeamCatalog.findById(s.homeTeamId).squad
@@ -121,7 +129,12 @@ class FootballViewModel(application: Application) : AndroidViewModel(application
     fun toggleMute() {
         val nextMuted = !settings.value.isMuted
         viewModelScope.launch { repository.setMuted(nextMuted) }
-        if (!nextMuted) soundEngine.playUiTap()
+        if (!nextMuted) soundEngine.playUiTap() else commentaryEngine.stop()
+    }
+
+    fun testCommentary() {
+        soundEngine.playUiTap()
+        commentaryEngine.playSampleCommentary()
     }
 
     // Graphics & Difficulty
@@ -241,6 +254,7 @@ class FootballViewModel(application: Application) : AndroidViewModel(application
         )
         _currentScreen.value = AppScreen.MATCH
         soundEngine.playWhistle()
+        commentaryEngine.announceKickoff(home.nameAr, away.nameAr)
         startGameLoop()
     }
 
@@ -264,10 +278,12 @@ class FootballViewModel(application: Application) : AndroidViewModel(application
             homeLineup = _lobbyLineup.value
         )
         soundEngine.playWhistle()
+        commentaryEngine.announceKickoff(home.nameAr, away.nameAr)
         startGameLoop()
     }
 
     fun pauseMatch() {
+        commentaryEngine.stop()
         _matchState.update {
             if (it.phase == MatchPhase.PLAYING || it.phase == MatchPhase.PRE_KICKOFF) {
                 it.copy(phase = MatchPhase.PAUSED, isChargingShot = false, shotCharge = 0f)
@@ -284,8 +300,33 @@ class FootballViewModel(application: Application) : AndroidViewModel(application
     fun exitToLobby() {
         gameLoopJob?.cancel()
         gameLoopJob = null
+        commentaryEngine.stop()
         inputSnapshot = InputSnapshot()
         _currentScreen.value = AppScreen.HOME
+    }
+
+    fun openQuickMatch() {
+        soundEngine.playUiTap()
+        _currentScreen.value = AppScreen.HOME
+    }
+
+    fun backToMenu() {
+        soundEngine.playUiTap()
+        _currentScreen.value = AppScreen.MENU
+    }
+
+    fun openSettings() {
+        soundEngine.playUiTap()
+        val cur = _currentScreen.value
+        if (cur != AppScreen.SETTINGS) {
+            screenBeforeSettings = cur
+        }
+        _currentScreen.value = AppScreen.SETTINGS
+    }
+
+    fun closeSettings() {
+        soundEngine.playUiTap()
+        _currentScreen.value = screenBeforeSettings
     }
 
     // PES / FIFA Controls
@@ -299,6 +340,20 @@ class FootballViewModel(application: Application) : AndroidViewModel(application
 
     fun setPress(pressing: Boolean) {
         inputSnapshot = inputSnapshot.copy(isPressing = pressing)
+    }
+
+    fun setDoublePress(doublePressing: Boolean) {
+        inputSnapshot = inputSnapshot.copy(isDoublePressing = doublePressing)
+    }
+
+    fun onSlideTackle() {
+        _matchState.update { state ->
+            if (state.phase != MatchPhase.PLAYING) return@update state
+            val events = mutableListOf<EngineEvent>()
+            val next = FootballEngine.performSlideTackle(state, inputSnapshot, settings.value.graphicsQuality, events)
+            dispatchEvents(events)
+            next
+        }
     }
 
     fun onShootPressed() {
@@ -378,19 +433,27 @@ class FootballViewModel(application: Application) : AndroidViewModel(application
                     )
                 }
                 dispatchEvents(events)
+                commentaryEngine.maybeSpeakPlayByPlay(_matchState.value)
                 delay(16L)
             }
         }
     }
 
     private fun dispatchEvents(events: List<EngineEvent>) {
+        if (events.isEmpty()) return
         for (event in events) {
             when (event) {
                 is EngineEvent.Whistle -> soundEngine.playWhistle()
-                is EngineEvent.Kick -> soundEngine.playKick(event.power)
+                is EngineEvent.Kick -> {
+                    soundEngine.playKick(event.power)
+                    if (event.power >= 0.78f) soundEngine.playCrowdReaction()
+                }
                 is EngineEvent.Pass -> soundEngine.playPass()
                 is EngineEvent.Tackle -> soundEngine.playTackle()
-                is EngineEvent.PostClang -> soundEngine.playPostClang()
+                is EngineEvent.PostClang -> {
+                    soundEngine.playPostClang()
+                    soundEngine.playCrowdReaction()
+                }
                 is EngineEvent.Goal -> soundEngine.playGoalHorn()
                 is EngineEvent.HalfTime -> Unit
                 is EngineEvent.MatchEnded -> {
@@ -400,6 +463,7 @@ class FootballViewModel(application: Application) : AndroidViewModel(application
                 }
             }
         }
+        commentaryEngine.onMatchEvents(events, _matchState.value)
     }
 
     // Gemini AI Tactical Coach
@@ -503,5 +567,6 @@ class FootballViewModel(application: Application) : AndroidViewModel(application
         gameLoopJob?.cancel()
         aiJob?.cancel()
         soundEngine.release()
+        commentaryEngine.release()
     }
 }

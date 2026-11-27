@@ -18,6 +18,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.TrendingFlat
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.DirectionsRun
+import androidx.compose.material.icons.filled.GroupAdd
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -53,8 +55,10 @@ fun MatchTouchControls(
     onJoystickMove: (Float, Float) -> Unit,
     onSprintChanged: (Boolean) -> Unit,
     onPressChanged: (Boolean) -> Unit,
+    onDoublePressChanged: (Boolean) -> Unit,
     onShootPressed: () -> Unit,
     onShootReleased: () -> Unit,
+    onSlideTackle: () -> Unit,
     onShortPassOrSwitch: () -> Unit,
     onThroughPassOrSlide: () -> Unit,
     onSwitchPlayer: () -> Unit,
@@ -74,7 +78,7 @@ fun MatchTouchControls(
             modifier = Modifier.testTag("virtual_joystick")
         )
 
-        // Right: Classic 4-Button PES/FIFA Diamond Cluster
+        // Right: Classic 4-Button PES/FIFA Cluster matching Attack & Defense layout
         Row(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.Bottom
@@ -83,40 +87,33 @@ fun MatchTouchControls(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Top-Left: THROUGH PASS (Attack) / SLIDE TACKLE (Defense)
+                // Top-Left (Above Pass/Switch):
+                // Attack -> CROSS / FAST BALL | Defense -> HOLD or SWIPE UP for 2-PLAYER PRESS
                 if (homeHasBall) {
                     TapActionCircle(
-                        label = "بينية",
+                        label = "عرضية",
                         accentColor = ElectricCyan,
-                        sizeDp = 58,
+                        sizeDp = 60,
                         onTap = onThroughPassOrSlide,
-                        modifier = Modifier.testTag("through_button")
+                        modifier = Modifier.testTag("cross_through_button")
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.TrendingFlat,
-                            contentDescription = "تمريرة بينية",
+                            contentDescription = "عرضية أو تمريرة سريعة",
                             tint = ElectricCyan,
                             modifier = Modifier.size(22.dp)
                         )
                     }
                 } else {
-                    TapActionCircle(
-                        label = "قطع",
-                        accentColor = CrimsonAlert,
-                        sizeDp = 58,
-                        onTap = onThroughPassOrSlide,
-                        modifier = Modifier.testTag("slide_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.DirectionsRun,
-                            contentDescription = "قطع الكرة",
-                            tint = CrimsonAlert,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
+                    DoublePressActionCircle(
+                        sizeDp = 60,
+                        accentColor = ElectricCyan,
+                        onActiveChanged = onDoublePressChanged,
+                        modifier = Modifier.testTag("double_press_button")
+                    )
                 }
 
-                // Bottom-Left: PASS (Attack) / SWITCH (Defense)
+                // Bottom-Left (Beside Sprint/Press): PASS (Attack) / SWITCH PLAYER (Defense)
                 if (homeHasBall) {
                     TapActionCircle(
                         label = "تمرير",
@@ -154,30 +151,13 @@ fun MatchTouchControls(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Top-Right: DASH / SPRINT
-                HoldActionCircle(
-                    label = "سرعة",
-                    accentColor = Color.White,
-                    sizeDp = 56,
-                    onPress = { onSprintChanged(true) },
-                    onRelease = { onSprintChanged(false) },
-                    modifier = Modifier.testTag("sprint_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Bolt,
-                        contentDescription = "سرعة",
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-
-                // Bottom-Right Primary: SHOOT (Attack) / PRESS (Defense)
+                // Top-Right (Above Sprint/Press): SHOOT (Attack) / SLIDE TACKLE (Defense)
                 if (homeHasBall) {
                     HoldActionCircle(
                         label = "تسديد",
                         accentColor = ChampionshipGold,
                         chargeProgress = shotCharge,
-                        sizeDp = 76,
+                        sizeDp = 58,
                         onPress = onShootPressed,
                         onRelease = onShootReleased,
                         modifier = Modifier.testTag("shoot_button")
@@ -186,27 +166,125 @@ fun MatchTouchControls(
                             imageVector = Icons.Default.SportsSoccer,
                             contentDescription = "تسديد",
                             tint = ChampionshipGold,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                 } else {
-                    HoldActionCircle(
-                        label = "ضغط",
-                        accentColor = TurfEmerald,
-                        sizeDp = 76,
-                        onPress = { onPressChanged(true) },
-                        onRelease = { onPressChanged(false) },
-                        modifier = Modifier.testTag("press_button")
+                    TapActionCircle(
+                        label = "زحلقة",
+                        accentColor = CrimsonAlert,
+                        sizeDp = 58,
+                        onTap = onSlideTackle,
+                        modifier = Modifier.testTag("slide_button")
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Shield,
-                            contentDescription = "ضغط على حامل الكرة",
-                            tint = TurfEmerald,
-                            modifier = Modifier.size(28.dp)
+                            imageVector = Icons.Default.DirectionsRun,
+                            contentDescription = "تزحلق لقطع الكرة",
+                            tint = CrimsonAlert,
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                 }
+
+                // Bottom-Right Primary (Big):
+                // Works for SPRINT both with & without ball, AND activates PRESS/STEAL in defense!
+                HoldActionCircle(
+                    label = if (homeHasBall) "جري" else "جري/ضغط",
+                    accentColor = if (homeHasBall) Color.White else TurfEmerald,
+                    sizeDp = 76,
+                    onPress = {
+                        onSprintChanged(true)
+                        if (!homeHasBall) onPressChanged(true)
+                    },
+                    onRelease = {
+                        onSprintChanged(false)
+                        onPressChanged(false)
+                    },
+                    modifier = Modifier.testTag("sprint_press_button")
+                ) {
+                    Icon(
+                        imageVector = if (homeHasBall) Icons.Default.Bolt else Icons.Default.Shield,
+                        contentDescription = if (homeHasBall) "جري بالكرة" else "جري وضغط لقطع الكرة",
+                        tint = if (homeHasBall) Color.White else TurfEmerald,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun DoublePressActionCircle(
+    sizeDp: Int,
+    accentColor: Color,
+    onActiveChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var pressed by remember { mutableStateOf(false) }
+    var swipedUp by remember { mutableStateOf(false) }
+    val active = pressed || swipedUp
+
+    Box(
+        modifier = modifier
+            .size(sizeDp.dp)
+            .clip(CircleShape)
+            .background(
+                if (swipedUp) ChampionshipGold.copy(alpha = 0.36f)
+                else if (pressed) accentColor.copy(alpha = 0.32f)
+                else Color(0xFF091710).copy(alpha = 0.62f)
+            )
+            .border(
+                width = if (swipedUp) 2.4.dp else 1.8.dp,
+                color = if (swipedUp) ChampionshipGold else accentColor.copy(alpha = 0.85f),
+                shape = CircleShape
+            )
+            .pointerInput(onActiveChanged) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    val startY = down.position.y
+                    pressed = true
+                    swipedUp = false
+                    onActiveChanged(true)
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                        if (change == null || !change.pressed) break
+                        change.consume()
+                        if (startY - change.position.y > 14f) {
+                            swipedUp = true
+                        }
+                    }
+                    pressed = false
+                    swipedUp = false
+                    onActiveChanged(false)
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.GroupAdd,
+                    contentDescription = "ضغط ثنائي بالضغط أو السحب لأعلى",
+                    tint = if (swipedUp) ChampionshipGold else accentColor,
+                    modifier = Modifier.size(18.dp)
+                )
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowUp,
+                    contentDescription = null,
+                    tint = if (swipedUp) ChampionshipGold else accentColor,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+            Text(
+                text = if (active) "ضغط ×2" else "ثنائي ↑",
+                style = MaterialTheme.typography.labelMedium,
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
         }
     }
 }

@@ -1,9 +1,5 @@
 package com.example.ui.screens
 
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
-import android.content.pm.ActivityInfo
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
@@ -39,11 +35,13 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,11 +56,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -72,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.ai.AiCoachUiState
+import com.example.model.CameraDistance
 import com.example.model.Difficulty
 import com.example.model.FormationType
 import com.example.model.GameSettings
@@ -102,11 +99,14 @@ import com.example.ui.theme.TurfEmerald
 fun MatchScreen(
     matchState: MatchState,
     settings: GameSettings,
+    liveCommentary: String? = null,
     onJoystickMove: (Float, Float) -> Unit,
     onSprintChanged: (Boolean) -> Unit,
     onPressChanged: (Boolean) -> Unit,
+    onDoublePressChanged: (Boolean) -> Unit = {},
     onShootPressed: () -> Unit,
     onShootReleased: () -> Unit,
+    onSlideTackle: () -> Unit = {},
     onShortPassOrSwitch: () -> Unit,
     onThroughPassOrSlide: () -> Unit,
     onSwitchPlayer: () -> Unit,
@@ -119,12 +119,15 @@ fun MatchScreen(
     onVolumeUp: () -> Unit,
     onVolumeDown: () -> Unit,
     onToggleMute: () -> Unit,
+    onCommentaryEnabledChange: (Boolean) -> Unit = {},
     onGraphicsSelected: (GraphicsQuality) -> Unit,
     onDifficultySelected: (Difficulty) -> Unit,
+    onCameraDistanceSelected: (CameraDistance) -> Unit = {},
     onShowPassIndicatorChange: (Boolean) -> Unit,
     onSelectFormation: (FormationType) -> Unit,
     onSwapStarters: (Int, Int) -> Unit,
     onSubstitutePlayer: (Int, Int) -> Unit,
+    onResetPreferences: () -> Unit = {},
     aiCoachState: AiCoachUiState,
     onAnalyzeMatchWithAi: () -> Unit,
     onAskAiCoach: (String) -> Unit,
@@ -133,17 +136,6 @@ fun MatchScreen(
 ) {
     var showTactics by remember { mutableStateOf(false) }
     var showAiCoach by remember { mutableStateOf(false) }
-
-    // Switch to widescreen Landscape for authentic PES/FIFA gameplay
-    val context = LocalContext.current
-    DisposableEffect(Unit) {
-        val activity = context.findActivity()
-        val prevOrientation = activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        onDispose {
-            activity?.requestedOrientation = prevOrientation
-        }
-    }
 
     BackHandler {
         when {
@@ -167,17 +159,23 @@ fun MatchScreen(
         PitchCanvas(
             matchState = matchState,
             graphicsQuality = settings.graphicsQuality,
+            cameraDistance = settings.cameraDistance,
             showPassIndicator = settings.showPassIndicator,
             modifier = Modifier.fillMaxSize()
         )
 
-        // Broadcast Top HUD (Scoreboard on Left, Audio, Tactics & Pause on Right)
+        // Broadcast Top HUD (Scoreboard on Left, Camera, Audio, Tactics & Pause on Right)
         MatchBroadcastTopHud(
             matchState = matchState,
             settings = settings,
             onVolumeDown = onVolumeDown,
             onVolumeUp = onVolumeUp,
             onToggleMute = onToggleMute,
+            onCycleCameraDistance = {
+                val entries = CameraDistance.entries
+                val next = entries[(settings.cameraDistance.ordinal + 1) % entries.size]
+                onCameraDistanceSelected(next)
+            },
             onOpenTactics = {
                 onPause()
                 showTactics = true
@@ -217,6 +215,41 @@ fun MatchScreen(
             }
         }
 
+        // Live Broadcast Commentary Ticker Pill
+        AnimatedVisibility(
+            visible = settings.isCommentaryEnabled && !settings.isMuted && !liveCommentary.isNullOrBlank() && matchState.bannerMessage == null && matchState.phase == MatchPhase.PLAYING,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 64.dp, start = 24.dp, end = 24.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = StadiumObsidian.copy(alpha = 0.80f),
+                border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.45f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Mic,
+                        contentDescription = "التعليق المباشر",
+                        tint = ElectricCyan,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = liveCommentary.orEmpty(),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+
         // Bottom-Center Tactical Radar + Active Player Name Pill (just like PES/FIFA!)
         if (matchState.phase == MatchPhase.PLAYING || matchState.phase == MatchPhase.PRE_KICKOFF || matchState.phase == MatchPhase.SET_PIECE) {
             Column(
@@ -241,7 +274,10 @@ fun MatchScreen(
                         )
                     }
                 }
-                PitchRadarOverlay(matchState = matchState)
+                PitchRadarOverlay(
+                    matchState = matchState,
+                    cameraDistance = settings.cameraDistance
+                )
             }
 
             // Touch Controls (Fixed LTR so Joystick is always on Left and 4 PES/FIFA buttons on Right)
@@ -252,8 +288,10 @@ fun MatchScreen(
                     onJoystickMove = onJoystickMove,
                     onSprintChanged = onSprintChanged,
                     onPressChanged = onPressChanged,
+                    onDoublePressChanged = onDoublePressChanged,
                     onShootPressed = onShootPressed,
                     onShootReleased = onShootReleased,
+                    onSlideTackle = onSlideTackle,
                     onShortPassOrSwitch = onShortPassOrSwitch,
                     onThroughPassOrSlide = onThroughPassOrSlide,
                     onSwitchPlayer = onSwitchPlayer,
@@ -283,9 +321,12 @@ fun MatchScreen(
                 onVolumeUp = onVolumeUp,
                 onVolumeDown = onVolumeDown,
                 onToggleMute = onToggleMute,
+                onCommentaryEnabledChange = onCommentaryEnabledChange,
                 onGraphicsSelected = onGraphicsSelected,
                 onDifficultySelected = onDifficultySelected,
-                onShowPassIndicatorChange = onShowPassIndicatorChange
+                onCameraDistanceSelected = onCameraDistanceSelected,
+                onShowPassIndicatorChange = onShowPassIndicatorChange,
+                onResetPreferences = onResetPreferences
             )
         }
 
@@ -370,6 +411,7 @@ private fun MatchBroadcastTopHud(
     onVolumeDown: () -> Unit,
     onVolumeUp: () -> Unit,
     onToggleMute: () -> Unit,
+    onCycleCameraDistance: () -> Unit,
     onOpenTactics: () -> Unit,
     onPause: () -> Unit,
     modifier: Modifier = Modifier
@@ -427,6 +469,35 @@ private fun MatchBroadcastTopHud(
                         ) {
                             Icon(Icons.Default.Add, contentDescription = "تعلية الصوت", tint = Color.White, modifier = Modifier.size(18.dp))
                         }
+                    }
+                }
+
+                Surface(
+                    onClick = onCycleCameraDistance,
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("hud_camera_button"),
+                    shape = RoundedCornerShape(24.dp),
+                    color = StadiumObsidian.copy(alpha = 0.84f),
+                    border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.58f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Videocam,
+                            contentDescription = "تبديل مسافة الكاميرا",
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = settings.cameraDistance.labelAr,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
 
@@ -527,9 +598,12 @@ private fun PauseOverlay(
     onVolumeUp: () -> Unit,
     onVolumeDown: () -> Unit,
     onToggleMute: () -> Unit,
+    onCommentaryEnabledChange: (Boolean) -> Unit,
     onGraphicsSelected: (GraphicsQuality) -> Unit,
     onDifficultySelected: (Difficulty) -> Unit,
-    onShowPassIndicatorChange: (Boolean) -> Unit
+    onCameraDistanceSelected: (CameraDistance) -> Unit,
+    onShowPassIndicatorChange: (Boolean) -> Unit,
+    onResetPreferences: () -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -578,9 +652,12 @@ private fun PauseOverlay(
                     onVolumeUp = onVolumeUp,
                     onVolumeDown = onVolumeDown,
                     onToggleMute = onToggleMute,
+                    onCommentaryEnabledChange = onCommentaryEnabledChange,
                     onGraphicsSelected = onGraphicsSelected,
                     onDifficultySelected = onDifficultySelected,
-                    onShowPassIndicatorChange = onShowPassIndicatorChange
+                    onCameraDistanceSelected = onCameraDistanceSelected,
+                    onShowPassIndicatorChange = onShowPassIndicatorChange,
+                    onResetPreferences = onResetPreferences
                 )
 
                 Button(
@@ -777,10 +854,4 @@ private fun FullTimeStatLine(label: String, homeValue: String, awayValue: String
         Text(text = label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(text = awayValue, fontFamily = ChakraPetchFontFamily, fontWeight = FontWeight.Bold, color = ChampionshipGold)
     }
-}
-
-private tailrec fun Context.findActivity(): Activity? = when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
 }

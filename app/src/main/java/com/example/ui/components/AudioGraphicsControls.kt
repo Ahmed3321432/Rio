@@ -17,14 +17,19 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Hd
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -32,6 +37,11 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -40,12 +50,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.model.CameraDistance
 import com.example.model.Difficulty
 import com.example.model.GameSettings
 import com.example.model.GraphicsQuality
 import com.example.ui.theme.ChakraPetchFontFamily
 import com.example.ui.theme.ChampionshipGold
 import com.example.ui.theme.DividerSubtle
+import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.StadiumCard
 import com.example.ui.theme.StadiumElevated
 import com.example.ui.theme.TurfEmerald
@@ -57,9 +69,12 @@ fun AudioAndGraphicsPanel(
     onVolumeUp: () -> Unit,
     onVolumeDown: () -> Unit,
     onToggleMute: () -> Unit,
+    onCommentaryEnabledChange: (Boolean) -> Unit = {},
     onGraphicsSelected: (GraphicsQuality) -> Unit,
     onDifficultySelected: (Difficulty) -> Unit,
+    onCameraDistanceSelected: (CameraDistance) -> Unit = {},
     onShowPassIndicatorChange: (Boolean) -> Unit,
+    onResetPreferences: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -73,6 +88,12 @@ fun AudioAndGraphicsPanel(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // Volume Controls (أعلي وأوطي الصوت)
+            var isDraggingSlider by remember { mutableStateOf(false) }
+            var sliderValue by remember(settings.volume, settings.isMuted) {
+                mutableFloatStateOf(if (settings.isMuted) 0f else settings.volume)
+            }
+            val displayedVolume = if (isDraggingSlider) sliderValue else if (settings.isMuted) 0f else settings.volume
+
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -84,7 +105,7 @@ fun AudioAndGraphicsPanel(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Icon(
-                            imageVector = if (settings.isMuted || settings.volume <= 0.01f) {
+                            imageVector = if (displayedVolume <= 0.01f) {
                                 Icons.AutoMirrored.Filled.VolumeOff
                             } else {
                                 Icons.AutoMirrored.Filled.VolumeUp
@@ -99,7 +120,7 @@ fun AudioAndGraphicsPanel(
                         )
                     }
 
-                    val pct = if (settings.isMuted) 0 else (settings.volume * 100).toInt()
+                    val pct = (displayedVolume * 100).toInt()
                     Surface(
                         shape = RoundedCornerShape(8.dp),
                         color = StadiumElevated
@@ -137,8 +158,15 @@ fun AudioAndGraphicsPanel(
                     }
 
                     Slider(
-                        value = if (settings.isMuted) 0f else settings.volume,
-                        onValueChange = onVolumeChange,
+                        value = displayedVolume,
+                        onValueChange = {
+                            isDraggingSlider = true
+                            sliderValue = it
+                        },
+                        onValueChangeFinished = {
+                            isDraggingSlider = false
+                            onVolumeChange(sliderValue)
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("volume_slider"),
@@ -185,6 +213,61 @@ fun AudioAndGraphicsPanel(
                 }
             }
 
+            // Commentary Toggle (المعلق الصوتي المباشر)
+            Surface(
+                onClick = { onCommentaryEnabledChange(!settings.isCommentaryEnabled) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("commentary_toggle_row"),
+                shape = RoundedCornerShape(14.dp),
+                color = StadiumElevated,
+                border = BorderStroke(1.dp, DividerSubtle)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = if (settings.isCommentaryEnabled) Icons.Default.Mic else Icons.Default.MicOff,
+                            contentDescription = null,
+                            tint = ElectricCyan
+                        )
+                        Column {
+                            Text(
+                                text = stringResource(R.string.commentary_label),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (settings.isCommentaryEnabled) "تعليق مباشر أثناء المباراة" else "متوقف حالياً",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Switch(
+                        checked = settings.isCommentaryEnabled,
+                        onCheckedChange = onCommentaryEnabledChange,
+                        modifier = Modifier.testTag("commentary_switch"),
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color(0xFF031E24),
+                            checkedTrackColor = ElectricCyan,
+                            uncheckedThumbColor = Color.White,
+                            uncheckedTrackColor = StadiumCard
+                        )
+                    )
+                }
+            }
+
             // Graphics Quality Selector (أعلي وأوطي الجرافيكس)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
@@ -205,7 +288,7 @@ fun AudioAndGraphicsPanel(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     GraphicsQuality.entries.forEach { quality ->
                         val selected = settings.graphicsQuality == quality
@@ -220,14 +303,16 @@ fun AudioAndGraphicsPanel(
                             border = if (selected) null else BorderStroke(1.dp, DividerSubtle)
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 8.dp),
+                                modifier = Modifier.padding(horizontal = 4.dp),
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
                                     text = quality.labelAr,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = if (selected) Color(0xFF1F1600) else MaterialTheme.colorScheme.onSurface
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (selected) Color(0xFF1F1600) else MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1
                                 )
                             }
                         }
@@ -278,6 +363,56 @@ fun AudioAndGraphicsPanel(
                                     text = diff.labelAr,
                                     style = MaterialTheme.typography.labelLarge,
                                     color = if (selected) Color(0xFF042111) else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Camera Distance Selector (قريبة / متوسطة / بعيدة)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Videocam,
+                        contentDescription = "مسافة الكاميرا",
+                        tint = ElectricCyan
+                    )
+                    Text(
+                        text = "مسافة الكاميرا",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CameraDistance.entries.forEach { camDist ->
+                        val selected = settings.cameraDistance == camDist
+                        Surface(
+                            onClick = { onCameraDistanceSelected(camDist) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("camera_distance_${camDist.name.lowercase()}"),
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (selected) ElectricCyan else StadiumElevated,
+                            border = if (selected) null else BorderStroke(1.dp, DividerSubtle)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = camDist.labelAr,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = if (selected) Color(0xFF031E24) else MaterialTheme.colorScheme.onSurface
                                 )
                             }
                         }
@@ -336,6 +471,31 @@ fun AudioAndGraphicsPanel(
                             uncheckedThumbColor = Color.White,
                             uncheckedTrackColor = StadiumCard
                         )
+                    )
+                }
+            }
+
+            if (onResetPreferences != null) {
+                OutlinedButton(
+                    onClick = onResetPreferences,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("reset_preferences_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, DividerSubtle)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        tint = ChampionshipGold,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "استعادة الإعدادات الافتراضية",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }

@@ -27,6 +27,7 @@ class SoundEngine {
     private val goalSamples by lazy { generateGoalHornAndCheer() }
     private val tackleSamples by lazy { generateTackle() }
     private val tapSamples by lazy { generateUiTap() }
+    private val crowdSamples by lazy { generateCrowdReaction() }
 
     fun updateVolume(effectiveVolume: Float) {
         currentVolume = effectiveVolume.coerceIn(0f, 1f)
@@ -39,6 +40,7 @@ class SoundEngine {
     fun playGoalHorn() = playClip(goalSamples, 1.0f)
     fun playTackle() = playClip(tackleSamples, 0.75f)
     fun playUiTap() = playClip(tapSamples, 0.5f)
+    fun playCrowdReaction() = playClip(crowdSamples, 0.55f)
 
     private fun playClip(samples: ShortArray, clipScale: Float) {
         val gain = (currentVolume * clipScale).coerceIn(0f, 1f)
@@ -182,6 +184,24 @@ class SoundEngine {
             val env = exp(-t * 60.0)
             val tone = sin(2.0 * PI * 880.0 * t) * env
             (tone * 0.45 * Short.MAX_VALUE).toInt().toShort()
+        }
+    }
+
+    private fun generateCrowdReaction(): ShortArray {
+        val duration = 0.72f
+        val count = (sampleRate * duration).toInt()
+        val rng = Random(31)
+        var lp = 0f
+        return ShortArray(count) { i ->
+            val t = i.toFloat() / sampleRate
+            val env = when {
+                t < 0.08f -> t / 0.08f
+                t > duration - 0.28f -> (duration - t) / 0.28f
+                else -> 1f
+            }.coerceIn(0f, 1f)
+            val raw = rng.nextFloat() * 2f - 1f
+            lp = lp * 0.86f + raw * 0.14f
+            (lp * env * 0.55 * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
         }
     }
 

@@ -16,6 +16,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.hypot
 
 class FootballEngineTest {
 
@@ -28,8 +29,8 @@ class FootballEngineTest {
         assertEquals(22, state.players.size)
         assertEquals(11, state.players.count { it.teamSide == TeamSide.HOME })
         assertEquals(11, state.players.count { it.teamSide == TeamSide.AWAY })
-        assertEquals(80f, state.ball.x, 0.01f)
-        assertEquals(50f, state.ball.y, 0.01f)
+        assertEquals(FootballEngine.CENTER_X, state.ball.x, 0.01f)
+        assertEquals(FootballEngine.CENTER_Y, state.ball.y, 0.01f)
         assertEquals(MatchPhase.PRE_KICKOFF, state.phase)
     }
 
@@ -57,8 +58,8 @@ class FootballEngineTest {
         state = state.copy(
             ball = state.ball.copy(
                 x = FootballEngine.FIELD_RIGHT - 0.5f,
-                y = 50f,
-                vx = 60f,
+                y = FootballEngine.CENTER_Y,
+                vx = 70f,
                 vy = 0f,
                 ownerId = null,
                 lastTouchTeam = TeamSide.HOME,
@@ -89,8 +90,8 @@ class FootballEngineTest {
         state = state.copy(
             ball = state.ball.copy(
                 x = FootballEngine.FIELD_LEFT + 0.5f,
-                y = 50f,
-                vx = -60f,
+                y = FootballEngine.CENTER_Y,
+                vx = -70f,
                 vy = 0f,
                 ownerId = null,
                 lastTouchTeam = TeamSide.AWAY,
@@ -122,7 +123,7 @@ class FootballEngineTest {
 
         state = state.copy(
             ball = state.ball.copy(
-                x = 80f,
+                x = FootballEngine.CENTER_X,
                 y = FootballEngine.FIELD_TOP - 0.5f,
                 vx = 0f,
                 vy = -40f,
@@ -151,24 +152,28 @@ class FootballEngineTest {
         var state = FootballEngine.createNewMatch(home, away, 90).copy(phase = MatchPhase.PLAYING)
         val events = mutableListOf<EngineEvent>()
 
-        // Give away_9 (ST) the ball right next to home_9 (ST)
         val updatedPlayers = state.players.map { p ->
             when (p.id) {
-                "away_9" -> p.copy(x = 80f, y = 50f)
-                "home_9" -> p.copy(x = 77.6f, y = 50f)
+                "away_9" -> p.copy(x = FootballEngine.CENTER_X, y = FootballEngine.CENTER_Y)
+                "home_9" -> p.copy(x = FootballEngine.CENTER_X - 2.2f, y = FootballEngine.CENTER_Y)
                 else -> p
             }
         }
         state = state.copy(
             players = updatedPlayers,
             activeHomePlayerId = "home_9",
-            ball = state.ball.copy(x = 79f, y = 50f, ownerId = "away_9", lastTouchTeam = TeamSide.AWAY)
+            ball = state.ball.copy(
+                x = FootballEngine.CENTER_X - 0.8f,
+                y = FootballEngine.CENTER_Y,
+                ownerId = "away_9",
+                lastTouchTeam = TeamSide.AWAY
+            )
         )
 
         state = FootballEngine.step(
             state = state,
             dtRaw = 0.03f,
-            input = InputSnapshot(isPressing = true),
+            input = InputSnapshot(isSprinting = true, isPressing = true),
             difficulty = Difficulty.MEDIUM,
             graphicsQuality = GraphicsQuality.HIGH,
             eventsOut = events
@@ -180,34 +185,115 @@ class FootballEngineTest {
     }
 
     @Test
+    fun opponentStealsBallWithinTwoSecondsIfPlayerStopsMoving() {
+        val home = TeamCatalog.teams[0]
+        val away = TeamCatalog.teams[1]
+        var state = FootballEngine.createNewMatch(home, away, 90).copy(phase = MatchPhase.PLAYING)
+        val events = mutableListOf<EngineEvent>()
+
+        val placed = state.players.map { p ->
+            when (p.id) {
+                "home_9" -> p.copy(x = 128f, y = 90f, vx = 0f, vy = 0f, facingAngle = 0f)
+                "away_9" -> p.copy(x = 152f, y = 90f, vx = 0f, vy = 0f)
+                else -> p
+            }
+        }
+        state = state.copy(
+            players = placed,
+            activeHomePlayerId = "home_9",
+            ball = state.ball.copy(x = 130f, y = 90f, ownerId = "home_9", lastTouchTeam = TeamSide.HOME),
+            lastBallOwnerId = "home_9",
+            carrierIdleSeconds = 0f
+        )
+
+        // Simulate ~2.2 seconds standing completely still (zero joystick input)
+        var stoleByAway = false
+        var tacklingEvents = 0
+        repeat(75) {
+            if (!stoleByAway) {
+                state = FootballEngine.step(
+                    state = state,
+                    dtRaw = 0.03f,
+                    input = InputSnapshot(moveX = 0f, moveY = 0f),
+                    difficulty = Difficulty.MEDIUM,
+                    graphicsQuality = GraphicsQuality.MEDIUM,
+                    eventsOut = events
+                )
+                if (state.ball.ownerId?.startsWith("away_") == true || state.stats.awayTackles >= 1) {
+                    stoleByAway = true
+                    tacklingEvents = state.stats.awayTackles
+                }
+            }
+        }
+
+        assertTrue(stoleByAway)
+        assertTrue(tacklingEvents >= 1)
+    }
+
+    @Test
+    fun doublePressBringsTwoHomeDefendersCloseAroundOpponentCarrier() {
+        val home = TeamCatalog.teams[0]
+        val away = TeamCatalog.teams[1]
+        var state = FootballEngine.createNewMatch(home, away, 90).copy(phase = MatchPhase.PLAYING)
+        val events = mutableListOf<EngineEvent>()
+
+        val placed = state.players.map { p ->
+            when (p.id) {
+                "away_9" -> p.copy(x = 140f, y = 90f, vx = 0f, vy = 0f)
+                "home_6" -> p.copy(x = 124f, y = 84f, vx = 0f, vy = 0f)
+                "home_5" -> p.copy(x = 124f, y = 96f, vx = 0f, vy = 0f)
+                else -> if (p.teamSide == TeamSide.HOME) p.copy(x = 25f, y = 90f, vx = 0f, vy = 0f) else p.copy(x = 230f, y = 90f, vx = 0f, vy = 0f)
+            }
+        }
+        state = state.copy(
+            players = placed,
+            activeHomePlayerId = "home_6",
+            ball = state.ball.copy(x = 138f, y = 90f, ownerId = "away_9", lastTouchTeam = TeamSide.AWAY)
+        )
+
+        repeat(15) {
+            state = FootballEngine.step(
+                state = state,
+                dtRaw = 0.03f,
+                input = InputSnapshot(isDoublePressing = true),
+                difficulty = Difficulty.MEDIUM,
+                graphicsQuality = GraphicsQuality.MEDIUM,
+                eventsOut = events
+            )
+        }
+
+        val defA = state.players.first { it.id == "home_6" }
+        val defB = state.players.first { it.id == "home_5" }
+        val distBetweenDefenders = hypot(defA.x - defB.x, defA.y - defB.y)
+        assertTrue(distBetweenDefenders < 12f)
+    }
+
+    @Test
     fun aimedShortPassSelectsAndDeliversBallToAimedTeammate() {
         val home = TeamCatalog.teams[0]
         val away = TeamCatalog.teams[1]
         var state = FootballEngine.createNewMatch(home, away, 90).copy(phase = MatchPhase.PLAYING)
         val events = mutableListOf<EngineEvent>()
 
-        // Place active passer (home_6 CDM) at center, with home_8 (LW) directly UP and home_10 (RW) directly DOWN
         val placed = state.players.map { p ->
             when (p.id) {
-                "home_6" -> p.copy(x = 65f, y = 50f, vx = 0f, vy = 0f)
-                "home_8" -> p.copy(x = 65f, y = 24f, vx = 0f, vy = 0f)
-                "home_10" -> p.copy(x = 65f, y = 76f, vx = 0f, vy = 0f)
-                else -> p.copy(x = 20f, y = 50f) // keep others out of the way
+                "home_6" -> p.copy(x = 110f, y = 90f, vx = 0f, vy = 0f)
+                "home_8" -> p.copy(x = 110f, y = 45f, vx = 0f, vy = 0f)
+                "home_10" -> p.copy(x = 110f, y = 135f, vx = 0f, vy = 0f)
+                else -> p.copy(x = 25f, y = 90f)
             }
         }
         state = state.copy(
             players = placed,
             activeHomePlayerId = "home_6",
-            ball = state.ball.copy(x = 66f, y = 50f, ownerId = "home_6", lastTouchTeam = TeamSide.HOME)
+            ball = state.ball.copy(x = 111f, y = 90f, ownerId = "home_6", lastTouchTeam = TeamSide.HOME)
         )
 
-        // Aim UP (moveY = -1f) and pass -> must select home_8 and deliver ball to home_8
         state = FootballEngine.handleShortPass(state, InputSnapshot(moveX = 0f, moveY = -1f), events)
         assertEquals("home_8", state.activeHomePlayerId)
         assertEquals("home_8", state.passInFlightTargetId)
 
-        // Step simulation until pass arrives cleanly at home_8
-        repeat(30) {
+        repeat(45) {
             state = FootballEngine.step(
                 state = state,
                 dtRaw = 0.03f,
@@ -218,6 +304,33 @@ class FootballEngineTest {
             )
         }
         assertEquals("home_8", state.ball.ownerId)
+    }
+
+    @Test
+    fun wingThroughActionLaunchesLoftedFastCrossIntoBox() {
+        val home = TeamCatalog.teams[0]
+        val away = TeamCatalog.teams[1]
+        var state = FootballEngine.createNewMatch(home, away, 90).copy(phase = MatchPhase.PLAYING)
+        val events = mutableListOf<EngineEvent>()
+
+        val placed = state.players.map { p ->
+            when (p.id) {
+                "home_10" -> p.copy(x = 215f, y = 152f, facingAngle = 0f)
+                "home_9" -> p.copy(x = 228f, y = 92f)
+                else -> p
+            }
+        }
+        state = state.copy(
+            players = placed,
+            activeHomePlayerId = "home_10",
+            ball = state.ball.copy(x = 217f, y = 152f, ownerId = "home_10", lastTouchTeam = TeamSide.HOME)
+        )
+
+        val crossed = FootballEngine.handleThroughPass(state, InputSnapshot(), events)
+        assertTrue(crossed.ball.vz >= 7.5f)
+        assertTrue(crossed.ball.ownerId == null)
+        assertEquals("home_9", crossed.activeHomePlayerId)
+        assertTrue(events.any { it is EngineEvent.Pass })
     }
 
     @Test
@@ -279,5 +392,76 @@ class FootballEngineTest {
 
         val muted = GameSettings(volume = 0.8f, isMuted = true)
         assertEquals(0f, muted.effectiveVolume, 0.001f)
+    }
+
+    @Test
+    fun staminaDepletesWhenSprintingAndRegeneratesWhenWalkingOrStandingStill() {
+        val home = TeamCatalog.teams[0]
+        val away = TeamCatalog.teams[1]
+        var state = FootballEngine.createNewMatch(home, away, 90).copy(phase = MatchPhase.PLAYING)
+        val events = mutableListOf<EngineEvent>()
+
+        // Place active player in open space with the ball and full stamina so no tackle interrupts sprinting
+        val activeId = state.activeHomePlayerId
+        state = state.copy(
+            ball = state.ball.copy(x = 80f, y = 90f, ownerId = activeId),
+            players = state.players.map {
+                if (it.id == activeId) it.copy(x = 80f, y = 90f, vx = 0f, vy = 0f, stamina = 1f)
+                else it.copy(x = 240f, y = if (it.teamSide == TeamSide.AWAY) 150f else 30f, vx = 0f, vy = 0f)
+            }
+        )
+
+        val sprintInput = InputSnapshot(moveX = 1f, moveY = 0f, isSprinting = true)
+        repeat(20) {
+            state = FootballEngine.step(
+                state = state,
+                dtRaw = 0.05f,
+                input = sprintInput,
+                difficulty = Difficulty.MEDIUM,
+                graphicsQuality = GraphicsQuality.HIGH,
+                eventsOut = events
+            )
+        }
+        val afterSprint = state.players.first { it.id == activeId }.stamina
+        assertTrue("Expected stamina to deplete while sprinting, got $afterSprint", afterSprint < 0.85f)
+
+        // Reset stamina to 0.4f and test walking regeneration
+        val walkStartState = state.copy(
+            ball = state.ball.copy(x = 80f, y = 90f, ownerId = activeId),
+            players = state.players.map {
+                if (it.id == activeId) it.copy(x = 80f, y = 90f, vx = 0f, vy = 0f, stamina = 0.4f, stunTimer = 0f)
+                else it.copy(x = 240f, y = if (it.teamSide == TeamSide.AWAY) 150f else 30f, vx = 0f, vy = 0f)
+            }
+        )
+        var walkState = walkStartState
+        val walkInput = InputSnapshot(moveX = 1f, moveY = 0f, isSprinting = false)
+        repeat(20) {
+            walkState = FootballEngine.step(
+                state = walkState,
+                dtRaw = 0.05f,
+                input = walkInput,
+                difficulty = Difficulty.MEDIUM,
+                graphicsQuality = GraphicsQuality.HIGH,
+                eventsOut = events
+            )
+        }
+        val afterWalk = walkState.players.first { it.id == activeId }.stamina
+        assertTrue("Expected stamina to regenerate while walking, got $afterWalk", afterWalk > 0.45f)
+
+        // Compare with standing still from 0.4f (regenerates faster than walking)
+        var idleState = walkStartState
+        val idleInput = InputSnapshot(moveX = 0f, moveY = 0f, isSprinting = false)
+        repeat(20) {
+            idleState = FootballEngine.step(
+                state = idleState,
+                dtRaw = 0.05f,
+                input = idleInput,
+                difficulty = Difficulty.MEDIUM,
+                graphicsQuality = GraphicsQuality.HIGH,
+                eventsOut = events
+            )
+        }
+        val afterIdle = idleState.players.first { it.id == activeId }.stamina
+        assertTrue("Expected stamina to regenerate faster while standing still ($afterIdle) than walking ($afterWalk)", afterIdle > afterWalk)
     }
 }

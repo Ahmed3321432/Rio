@@ -11,6 +11,8 @@
     <string name="graphics_low">منخفض</string>
     <string name="graphics_medium">متوسط</string>
     <string name="graphics_high">فائق</string>
+    <string name="graphics_ultra">ألترا 4K</string>
+    <string name="commentary_label">المعلق الصوتي المباشر</string>
     <string name="diff_easy">سهل</string>
     <string name="diff_medium">متوسط</string>
     <string name="diff_hard">محترف</string>

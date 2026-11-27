@@ -1,0 +1,6 @@
+{
+  "name": "ركلة الأبطال",
+  "description": "لعبة كرة قدم بجرافيكس متطور مع اختيار الفرق والتحكم الكامل في مستوى الصوت وجودة الرسوميات والصعوبة.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

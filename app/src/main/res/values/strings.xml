@@ -1,0 +1,31 @@
+<resources>
+    <string name="app_name">ركلة الأبطال</string>
+    <string name="kick_off">ابدأ المباراة</string>
+    <string name="your_team">فريقك</string>
+    <string name="opponent_team">الخصم</string>
+    <string name="random_matchup">اختيار عشوائي</string>
+    <string name="volume_label">مستوى الصوت</string>
+    <string name="graphics_label">جودة الجرافيكس</string>
+    <string name="difficulty_label">مستوى الصعوبة</string>
+    <string name="match_time_label">مدة المباراة</string>
+    <string name="graphics_low">منخفض</string>
+    <string name="graphics_medium">متوسط</string>
+    <string name="graphics_high">فائق</string>
+    <string name="diff_easy">سهل</string>
+    <string name="diff_medium">متوسط</string>
+    <string name="diff_hard">محترف</string>
+    <string name="shoot_label">تسديد</string>
+    <string name="tackle_label">افتكاك</string>
+    <string name="pass_label">تمرير</string>
+    <string name="switch_label">تبديل</string>
+    <string name="sprint_label">سرعة</string>
+    <string name="pause_title">إيقاف مؤقت</string>
+    <string name="resume_game">استكمال اللعب</string>
+    <string name="restart_match">إعادة المباراة</string>
+    <string name="exit_lobby">العودة للقائمة</string>
+    <string name="goal_banner">هدف رائع!</string>
+    <string name="full_time">نهاية المباراة</string>
+    <string name="you_win">فوز مستحق!</string>
+    <string name="you_lose">حظ أوفر!</string>
+    <string name="draw_result">تعادل مثير!</string>
+</resources>
